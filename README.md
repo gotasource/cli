@@ -7,11 +7,11 @@ Gota CLI is a compiler base on [TypeScript](https://www.typescriptlang.org/) to 
 For the latest stable version:
 
 ```bash
-npm install -g gota-cli
+npm install -g @gota/cli
 ```
 
 For our nightly builds:
 
 ```bash
-npm install -g gota-cli@next
+npm install -g @gota/cli@next
 ```
