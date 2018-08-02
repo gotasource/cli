@@ -1,8 +1,8 @@
 {
-    "name": "gota-cli",
+    "name": "@gota/cli",
     "author": "Gota",
-    "homepage": "https://github.com/gotasource/gota-cli",
-    "version": "0.0.4",
+    "homepage": "https://github.com/gotasource/cli",
+    "version": "0.0.6",
     "license": "Apache-2.0",
     "description": "Custom TypeScript Compiler",
     "keywords": [
@@ -13,11 +13,11 @@
         "javascript"
     ],
     "bugs": {
-        "url": "https://github.com/gotasource/gota-cli/issues"
+        "url": "https://github.com/gotasource/cli/issues"
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/gotasource/gota-cli.git"
+        "url": "https://github.com/gotasource/cli.git"
     },
     "main": "./lib/typescript.js",
     "typings": "./lib/typescript.d.ts",
