@@ -38,7 +38,7 @@ namespace compiler {
      * Correlates compilation inputs and outputs
      */
     export interface CompilationOutput {
-        readonly inputs: ReadonlyArray<documents.TextDocument>;
+        readonly inputs: readonly documents.TextDocument[];
         readonly js: documents.TextDocument | undefined;
         readonly dts: documents.TextDocument | undefined;
         readonly map: documents.TextDocument | undefined;
@@ -49,15 +49,16 @@ namespace compiler {
         public readonly program: ts.Program | undefined;
         public readonly result: ts.EmitResult | undefined;
         public readonly options: ts.CompilerOptions;
-        public readonly diagnostics: ReadonlyArray<ts.Diagnostic>;
+        public readonly diagnostics: readonly ts.Diagnostic[];
         public readonly js: ReadonlyMap<string, documents.TextDocument>;
         public readonly dts: ReadonlyMap<string, documents.TextDocument>;
         public readonly maps: ReadonlyMap<string, documents.TextDocument>;
+        public symlinks?: vfs.FileSet; // Location to store original symlinks so they may be used in both original and declaration file compilations
 
         private _inputs: documents.TextDocument[] = [];
         private _inputsAndOutputs: collections.SortedMap<string, CompilationOutput>;
 
-        constructor(host: fakes.CompilerHost, options: ts.CompilerOptions, program: ts.Program | undefined, result: ts.EmitResult | undefined, diagnostics: ts.Diagnostic[]) {
+        constructor(host: fakes.CompilerHost, options: ts.CompilerOptions, program: ts.Program | undefined, result: ts.EmitResult | undefined, diagnostics: readonly ts.Diagnostic[]) {
             this.host = host;
             this.program = program;
             this.result = result;
@@ -142,15 +143,15 @@ namespace compiler {
             return this.host.vfs;
         }
 
-        public get inputs(): ReadonlyArray<documents.TextDocument> {
+        public get inputs(): readonly documents.TextDocument[] {
             return this._inputs;
         }
 
-        public get outputs(): ReadonlyArray<documents.TextDocument> {
+        public get outputs(): readonly documents.TextDocument[] {
             return this.host.outputs;
         }
 
-        public get traces(): ReadonlyArray<string> {
+        public get traces(): readonly string[] {
             return this.host.traces;
         }
 
@@ -171,7 +172,7 @@ namespace compiler {
             return this._inputsAndOutputs.get(vpath.resolve(this.vfs.cwd(), path));
         }
 
-        public getInputs(path: string): ReadonlyArray<documents.TextDocument> | undefined {
+        public getInputs(path: string): readonly documents.TextDocument[] | undefined {
             const outputs = this.getInputsAndOutputs(path);
             return outputs && outputs.inputs;
         }
@@ -182,8 +183,9 @@ namespace compiler {
         }
 
         public getSourceMapRecord(): string | undefined {
-            if (this.result.sourceMaps && this.result.sourceMaps.length > 0) {
-                return Harness.SourceMapRecorder.getSourceMapRecord(this.result.sourceMaps, this.program, Array.from(this.js.values()), Array.from(this.dts.values()));
+            const maps = this.result!.sourceMaps;
+            if (maps && maps.length > 0) {
+                return Harness.SourceMapRecorder.getSourceMapRecord(maps, this.program!, Array.from(this.js.values()).filter(d => !ts.fileExtensionIs(d.file, ts.Extension.Json)), Array.from(this.dts.values()));
             }
         }
 
@@ -215,6 +217,21 @@ namespace compiler {
                 }
             }
             return vpath.changeExtension(path, ext);
+        }
+
+        public getNumberOfJsFiles(includeJson: boolean) {
+            if (includeJson) {
+                return this.js.size;
+            }
+            else {
+                let count = this.js.size;
+                this.js.forEach(document => {
+                    if (ts.fileExtensionIs(document.file, ts.Extension.Json)) {
+                        count--;
+                    }
+                });
+                return count;
+            }
         }
     }
 

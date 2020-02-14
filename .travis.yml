@@ -1,11 +1,9 @@
 language: node_js
 
 node_js:
-  - 'stable'
+  - 'node'
+  - '10'
   - '8'
-  - '6'
-
-sudo: false
 
 env:
   - workerCount=3 timeout=600000
@@ -16,12 +14,10 @@ matrix:
 branches:
   only:
   - master
-  - release-2.7
-  - release-2.8
+  - /^release-.*/
 
 install:
   - npm uninstall typescript --no-save
-  - npm uninstall tslint --no-save
   - npm install
 
 cache:

@@ -2,7 +2,7 @@
 namespace ts.codefix {
     const fixName = "disableJsDiagnostics";
     const fixId = "disableJsDiagnostics";
-    const errorCodes = mapDefined(Object.keys(Diagnostics) as ReadonlyArray<keyof typeof Diagnostics>, key => {
+    const errorCodes = mapDefined(Object.keys(Diagnostics) as readonly (keyof typeof Diagnostics)[], key => {
         const diag = Diagnostics[key];
         return diag.category === DiagnosticCategory.Error ? diag.code : undefined;
     });
@@ -12,7 +12,7 @@ namespace ts.codefix {
         getCodeActions(context) {
             const { sourceFile, program, span, host, formatContext } = context;
 
-            if (!isInJavaScriptFile(sourceFile) || !isCheckJsEnabledForFile(sourceFile, program.getCompilerOptions())) {
+            if (!isInJSFile(sourceFile) || !isCheckJsEnabledForFile(sourceFile, program.getCompilerOptions())) {
                 return undefined;
             }
 
@@ -38,8 +38,8 @@ namespace ts.codefix {
         getAllCodeActions: context => {
             const seenLines = createMap<true>();
             return codeFixAll(context, errorCodes, (changes, diag) => {
-                if (textChanges.isValidLocationToAddComment(diag.file!, diag.start!)) {
-                    makeChange(changes, diag.file!, diag.start!, seenLines);
+                if (textChanges.isValidLocationToAddComment(diag.file, diag.start)) {
+                    makeChange(changes, diag.file, diag.start, seenLines);
                 }
             });
         },

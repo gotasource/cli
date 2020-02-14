@@ -75,16 +75,32 @@ const abac: AB = {
     }
 }
 
+// Excess property checks must match all discriminable properties
+type Button = { tag: 'button'; type?: 'submit'; };
+type Anchor = { tag: 'a'; type?: string; href: string };
+
+type Union = Button | Anchor;
+const obj: Union = {
+    tag: 'button',
+    type: 'submit',
+
+    // should have error here
+    href: 'foo',
+};
+
 
 //// [excessPropertyCheckWithUnions.js]
 "use strict";
-var __assign = (this && this.__assign) || Object.assign || function(t) {
-    for (var s, i = 1, n = arguments.length; i < n; i++) {
-        s = arguments[i];
-        for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
-            t[p] = s[p];
-    }
-    return t;
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
 };
 var wrong = { tag: "T", a1: "extra" };
 wrong = { tag: "A", d20: 12 };
@@ -121,4 +137,10 @@ var abac = {
         a: "a",
         c: "c"
     }
+};
+var obj = {
+    tag: 'button',
+    type: 'submit',
+    // should have error here
+    href: 'foo'
 };

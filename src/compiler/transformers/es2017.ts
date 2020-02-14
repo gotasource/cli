@@ -32,6 +32,17 @@ namespace ts {
 
         let enclosingFunctionParameterNames: UnderscoreEscapedMap<true>;
 
+        /**
+         * Keeps track of property names accessed on super (`super.x`) within async functions.
+         */
+        let capturedSuperProperties: UnderscoreEscapedMap<true>;
+        /** Whether the async function contains an element access on super (`super[x]`). */
+        let hasSuperElementAccess: boolean;
+        /** A set of node IDs for generated super accessors (variable statements). */
+        const substitutedSuperAccessors: boolean[] = [];
+
+        let topLevel: boolean;
+
         // Save the previous transformation hooks.
         const previousOnEmitNode = context.onEmitNode;
         const previousOnSubstituteNode = context.onSubstituteNode;
@@ -47,16 +58,30 @@ namespace ts {
                 return node;
             }
 
+            topLevel = isEffectiveStrictModeSourceFile(node, compilerOptions);
             const visited = visitEachChild(node, visitor, context);
             addEmitHelpers(visited, context.readEmitHelpers());
             return visited;
+        }
+
+        function doOutsideOfTopLevel<T, U>(cb: (value: T) => U, value: T) {
+            if (topLevel) {
+                topLevel = false;
+                const result = cb(value);
+                topLevel = true;
+                return result;
+            }
+            return cb(value);
+        }
+
+        function visitDefault(node: Node): VisitResult<Node> {
+            return visitEachChild(node, visitor, context);
         }
 
         function visitor(node: Node): VisitResult<Node> {
             if ((node.transformFlags & TransformFlags.ContainsES2017) === 0) {
                 return node;
             }
-
             switch (node.kind) {
                 case SyntaxKind.AsyncKeyword:
                     // ES2017 async modifier should be elided for targets < ES2017
@@ -66,16 +91,35 @@ namespace ts {
                     return visitAwaitExpression(<AwaitExpression>node);
 
                 case SyntaxKind.MethodDeclaration:
-                    return visitMethodDeclaration(<MethodDeclaration>node);
+                    return doOutsideOfTopLevel(visitMethodDeclaration, <MethodDeclaration>node);
 
                 case SyntaxKind.FunctionDeclaration:
-                    return visitFunctionDeclaration(<FunctionDeclaration>node);
+                    return doOutsideOfTopLevel(visitFunctionDeclaration, <FunctionDeclaration>node);
 
                 case SyntaxKind.FunctionExpression:
-                    return visitFunctionExpression(<FunctionExpression>node);
+                    return doOutsideOfTopLevel(visitFunctionExpression, <FunctionExpression>node);
 
                 case SyntaxKind.ArrowFunction:
                     return visitArrowFunction(<ArrowFunction>node);
+
+                case SyntaxKind.PropertyAccessExpression:
+                    if (capturedSuperProperties && isPropertyAccessExpression(node) && node.expression.kind === SyntaxKind.SuperKeyword) {
+                        capturedSuperProperties.set(node.name.escapedText, true);
+                    }
+                    return visitEachChild(node, visitor, context);
+
+                case SyntaxKind.ElementAccessExpression:
+                    if (capturedSuperProperties && (<ElementAccessExpression>node).expression.kind === SyntaxKind.SuperKeyword) {
+                        hasSuperElementAccess = true;
+                    }
+                    return visitEachChild(node, visitor, context);
+
+                case SyntaxKind.GetAccessor:
+                case SyntaxKind.SetAccessor:
+                case SyntaxKind.Constructor:
+                case SyntaxKind.ClassDeclaration:
+                case SyntaxKind.ClassExpression:
+                    return doOutsideOfTopLevel(visitDefault, node);
 
                 default:
                     return visitEachChild(node, visitor, context);
@@ -116,10 +160,10 @@ namespace ts {
 
         function visitCatchClauseInAsyncBody(node: CatchClause) {
             const catchClauseNames = createUnderscoreEscapedMap<true>();
-            recordDeclarationName(node.variableDeclaration, catchClauseNames);
+            recordDeclarationName(node.variableDeclaration!, catchClauseNames); // TODO: GH#18217
 
             // names declared in a catch variable are block scoped
-            let catchClauseUnshadowedNames: UnderscoreEscapedMap<true>;
+            let catchClauseUnshadowedNames: UnderscoreEscapedMap<true> | undefined;
             catchClauseNames.forEach((_, escapedName) => {
                 if (enclosingFunctionParameterNames.has(escapedName)) {
                     if (!catchClauseUnshadowedNames) {
@@ -144,7 +188,7 @@ namespace ts {
         function visitVariableStatementInAsyncBody(node: VariableStatement) {
             if (isVariableDeclarationListWithCollidingName(node.declarationList)) {
                 const expression = visitVariableDeclarationListWithCollidingNames(node.declarationList, /*hasReceiver*/ false);
-                return expression ? createStatement(expression) : undefined;
+                return expression ? createExpressionStatement(expression) : undefined;
             }
             return visitEachChild(node, visitor, context);
         }
@@ -153,7 +197,7 @@ namespace ts {
             return updateForIn(
                 node,
                 isVariableDeclarationListWithCollidingName(node.initializer)
-                    ? visitVariableDeclarationListWithCollidingNames(node.initializer, /*hasReceiver*/ true)
+                    ? visitVariableDeclarationListWithCollidingNames(node.initializer, /*hasReceiver*/ true)!
                     : visitNode(node.initializer, visitor, isForInitializer),
                 visitNode(node.expression, visitor, isExpression),
                 visitNode(node.statement, asyncBodyVisitor, isStatement, liftToBlock)
@@ -165,7 +209,7 @@ namespace ts {
                 node,
                 visitNode(node.awaitModifier, visitor, isToken),
                 isVariableDeclarationListWithCollidingName(node.initializer)
-                    ? visitVariableDeclarationListWithCollidingNames(node.initializer, /*hasReceiver*/ true)
+                    ? visitVariableDeclarationListWithCollidingNames(node.initializer, /*hasReceiver*/ true)!
                     : visitNode(node.initializer, visitor, isForInitializer),
                 visitNode(node.expression, visitor, isExpression),
                 visitNode(node.statement, asyncBodyVisitor, isStatement, liftToBlock)
@@ -173,10 +217,11 @@ namespace ts {
         }
 
         function visitForStatementInAsyncBody(node: ForStatement) {
+            const initializer = node.initializer!; // TODO: GH#18217
             return updateFor(
                 node,
-                isVariableDeclarationListWithCollidingName(node.initializer)
-                    ? visitVariableDeclarationListWithCollidingNames(node.initializer, /*hasReceiver*/ false)
+                isVariableDeclarationListWithCollidingName(initializer)
+                    ? visitVariableDeclarationListWithCollidingNames(initializer, /*hasReceiver*/ false)
                     : visitNode(node.initializer, visitor, isForInitializer),
                 visitNode(node.condition, visitor, isExpression),
                 visitNode(node.incrementor, visitor, isExpression),
@@ -312,10 +357,10 @@ namespace ts {
         }
 
         function isVariableDeclarationListWithCollidingName(node: ForInitializer): node is VariableDeclarationList {
-            return node
+            return !!node
                 && isVariableDeclarationList(node)
                 && !(node.flags & NodeFlags.BlockScoped)
-                && forEach(node.declarations, collidesWithParameterName);
+                && node.declarations.some(collidesWithParameterName);
         }
 
         function visitVariableDeclarationListWithCollidingNames(node: VariableDeclarationList, hasReceiver: boolean) {
@@ -353,7 +398,7 @@ namespace ts {
             const converted = setSourceMapRange(
                 createAssignment(
                     convertToAssignmentElementTarget(node.name),
-                    node.initializer
+                    node.initializer!
                 ),
                 node
             );
@@ -397,6 +442,13 @@ namespace ts {
                 recordDeclarationName(parameter, enclosingFunctionParameterNames);
             }
 
+            const savedCapturedSuperProperties = capturedSuperProperties;
+            const savedHasSuperElementAccess = hasSuperElementAccess;
+            if (!isArrowFunction) {
+                capturedSuperProperties = createUnderscoreEscapedMap<true>();
+                hasSuperElementAccess = false;
+            }
+
             let result: ConciseBody;
             if (!isArrowFunction) {
                 const statements: Statement[] = [];
@@ -405,6 +457,7 @@ namespace ts {
                     createReturn(
                         createAwaiterHelper(
                             context,
+                            !topLevel,
                             hasLexicalArguments,
                             promiseConstructor,
                             transformAsyncFunctionBodyWorker(<Block>node.body, statementOffset)
@@ -412,20 +465,30 @@ namespace ts {
                     )
                 );
 
-                addRange(statements, endLexicalEnvironment());
+                insertStatementsAfterStandardPrologue(statements, endLexicalEnvironment());
+
+                // Minor optimization, emit `_super` helper to capture `super` access in an arrow.
+                // This step isn't needed if we eventually transform this to ES5.
+                const emitSuperHelpers = languageVersion >= ScriptTarget.ES2015 && resolver.getNodeCheckFlags(node) & (NodeCheckFlags.AsyncMethodWithSuperBinding | NodeCheckFlags.AsyncMethodWithSuper);
+
+                if (emitSuperHelpers) {
+                    enableSubstitutionForAsyncMethodsWithSuper();
+                    if (hasEntries(capturedSuperProperties)) {
+                        const variableStatement = createSuperAccessVariableStatement(resolver, node, capturedSuperProperties);
+                        substitutedSuperAccessors[getNodeId(variableStatement)] = true;
+                        insertStatementsAfterStandardPrologue(statements, [variableStatement]);
+                    }
+                }
 
                 const block = createBlock(statements, /*multiLine*/ true);
                 setTextRange(block, node.body);
 
-                // Minor optimization, emit `_super` helper to capture `super` access in an arrow.
-                // This step isn't needed if we eventually transform this to ES5.
-                if (languageVersion >= ScriptTarget.ES2015) {
+                if (emitSuperHelpers && hasSuperElementAccess) {
+                    // Emit helpers for super element access expressions (`super[x]`).
                     if (resolver.getNodeCheckFlags(node) & NodeCheckFlags.AsyncMethodWithSuperBinding) {
-                        enableSubstitutionForAsyncMethodsWithSuper();
                         addEmitHelper(block, advancedAsyncSuperHelper);
                     }
                     else if (resolver.getNodeCheckFlags(node) & NodeCheckFlags.AsyncMethodWithSuper) {
-                        enableSubstitutionForAsyncMethodsWithSuper();
                         addEmitHelper(block, asyncSuperHelper);
                     }
                 }
@@ -435,15 +498,16 @@ namespace ts {
             else {
                 const expression = createAwaiterHelper(
                     context,
+                    !topLevel,
                     hasLexicalArguments,
                     promiseConstructor,
-                    transformAsyncFunctionBodyWorker(node.body)
+                    transformAsyncFunctionBodyWorker(node.body!)
                 );
 
                 const declarations = endLexicalEnvironment();
                 if (some(declarations)) {
                     const block = convertToFunctionBody(expression);
-                    result = updateBlock(block, setTextRange(createNodeArray(concatenate(block.statements, declarations)), block.statements));
+                    result = updateBlock(block, setTextRange(createNodeArray(concatenate(declarations, block.statements)), block.statements));
                 }
                 else {
                     result = expression;
@@ -451,6 +515,10 @@ namespace ts {
             }
 
             enclosingFunctionParameterNames = savedEnclosingFunctionParameterNames;
+            if (!isArrowFunction) {
+                capturedSuperProperties = savedCapturedSuperProperties;
+                hasSuperElementAccess = savedHasSuperElementAccess;
+            }
             return result;
         }
 
@@ -463,7 +531,7 @@ namespace ts {
             }
         }
 
-        function getPromiseConstructor(type: TypeNode) {
+        function getPromiseConstructor(type: TypeNode | undefined) {
             const typeName = type && getEntityNameFromTypeNode(type);
             if (typeName && isEntityName(typeName)) {
                 const serializationKind = resolver.getTypeReferenceSerializationKind(typeName);
@@ -492,6 +560,8 @@ namespace ts {
                 context.enableEmitNotification(SyntaxKind.GetAccessor);
                 context.enableEmitNotification(SyntaxKind.SetAccessor);
                 context.enableEmitNotification(SyntaxKind.Constructor);
+                // We need to be notified when entering the generated accessor arrow functions.
+                context.enableEmitNotification(SyntaxKind.VariableStatement);
             }
         }
 
@@ -514,6 +584,14 @@ namespace ts {
                     enclosingSuperContainerFlags = savedEnclosingSuperContainerFlags;
                     return;
                 }
+            }
+            // Disable substitution in the generated super accessor itself.
+            else if (enabledSubstitutions && substitutedSuperAccessors[getNodeId(node)]) {
+                const savedEnclosingSuperContainerFlags = enclosingSuperContainerFlags;
+                enclosingSuperContainerFlags = 0;
+                previousOnEmitNode(hint, node, emitCallback);
+                enclosingSuperContainerFlags = savedEnclosingSuperContainerFlags;
+                return;
             }
             previousOnEmitNode(hint, node, emitCallback);
         }
@@ -547,8 +625,10 @@ namespace ts {
 
         function substitutePropertyAccessExpression(node: PropertyAccessExpression) {
             if (node.expression.kind === SyntaxKind.SuperKeyword) {
-                return createSuperAccessInAsyncMethod(
-                    createLiteral(idText(node.name)),
+                return setTextRange(
+                    createPropertyAccess(
+                        createFileLevelUniqueName("_super"),
+                        node.name),
                     node
                 );
             }
@@ -557,7 +637,7 @@ namespace ts {
 
         function substituteElementAccessExpression(node: ElementAccessExpression) {
             if (node.expression.kind === SyntaxKind.SuperKeyword) {
-                return createSuperAccessInAsyncMethod(
+                return createSuperElementAccessInAsyncMethod(
                     node.argumentExpression,
                     node
                 );
@@ -592,12 +672,12 @@ namespace ts {
                 || kind === SyntaxKind.SetAccessor;
         }
 
-        function createSuperAccessInAsyncMethod(argumentExpression: Expression, location: TextRange): LeftHandSideExpression {
+        function createSuperElementAccessInAsyncMethod(argumentExpression: Expression, location: TextRange): LeftHandSideExpression {
             if (enclosingSuperContainerFlags & NodeCheckFlags.AsyncMethodWithSuperBinding) {
                 return setTextRange(
                     createPropertyAccess(
                         createCall(
-                            createFileLevelUniqueName("_super"),
+                            createFileLevelUniqueName("_superIndex"),
                             /*typeArguments*/ undefined,
                             [argumentExpression]
                         ),
@@ -609,7 +689,7 @@ namespace ts {
             else {
                 return setTextRange(
                     createCall(
-                        createFileLevelUniqueName("_super"),
+                        createFileLevelUniqueName("_superIndex"),
                         /*typeArguments*/ undefined,
                         [argumentExpression]
                     ),
@@ -619,22 +699,120 @@ namespace ts {
         }
     }
 
-    const awaiterHelper: EmitHelper = {
+    /** Creates a variable named `_super` with accessor properties for the given property names. */
+    export function createSuperAccessVariableStatement(resolver: EmitResolver, node: FunctionLikeDeclaration, names: UnderscoreEscapedMap<true>) {
+        // Create a variable declaration with a getter/setter (if binding) definition for each name:
+        //   const _super = Object.create(null, { x: { get: () => super.x, set: (v) => super.x = v }, ... });
+        const hasBinding = (resolver.getNodeCheckFlags(node) & NodeCheckFlags.AsyncMethodWithSuperBinding) !== 0;
+        const accessors: PropertyAssignment[] = [];
+        names.forEach((_, key) => {
+            const name = unescapeLeadingUnderscores(key);
+            const getterAndSetter: PropertyAssignment[] = [];
+            getterAndSetter.push(createPropertyAssignment(
+                "get",
+                createArrowFunction(
+                    /* modifiers */ undefined,
+                    /* typeParameters */ undefined,
+                    /* parameters */ [],
+                    /* type */ undefined,
+                    /* equalsGreaterThanToken */ undefined,
+                    setEmitFlags(
+                        createPropertyAccess(
+                            setEmitFlags(
+                                createSuper(),
+                                EmitFlags.NoSubstitution
+                            ),
+                            name
+                        ),
+                        EmitFlags.NoSubstitution
+                    )
+                )
+            ));
+            if (hasBinding) {
+                getterAndSetter.push(
+                    createPropertyAssignment(
+                        "set",
+                        createArrowFunction(
+                            /* modifiers */ undefined,
+                            /* typeParameters */ undefined,
+                            /* parameters */ [
+                                createParameter(
+                                    /* decorators */ undefined,
+                                    /* modifiers */ undefined,
+                                    /* dotDotDotToken */ undefined,
+                                    "v",
+                                    /* questionToken */ undefined,
+                                    /* type */ undefined,
+                                    /* initializer */ undefined
+                                )
+                            ],
+                            /* type */ undefined,
+                            /* equalsGreaterThanToken */ undefined,
+                            createAssignment(
+                                setEmitFlags(
+                                    createPropertyAccess(
+                                        setEmitFlags(
+                                            createSuper(),
+                                            EmitFlags.NoSubstitution
+                                        ),
+                                        name
+                                    ),
+                                    EmitFlags.NoSubstitution
+                                ),
+                                createIdentifier("v")
+                            )
+                        )
+                    )
+                );
+            }
+            accessors.push(
+                createPropertyAssignment(
+                    name,
+                    createObjectLiteral(getterAndSetter),
+                )
+            );
+        });
+        return createVariableStatement(
+            /* modifiers */ undefined,
+            createVariableDeclarationList(
+                [
+                    createVariableDeclaration(
+                        createFileLevelUniqueName("_super"),
+                        /* type */ undefined,
+                        createCall(
+                            createPropertyAccess(
+                                createIdentifier("Object"),
+                                "create"
+                            ),
+                            /* typeArguments */ undefined,
+                            [
+                                createNull(),
+                                createObjectLiteral(accessors, /* multiline */ true)
+                            ]
+                        )
+                    )
+                ],
+                NodeFlags.Const));
+    }
+
+    export const awaiterHelper: UnscopedEmitHelper = {
         name: "typescript:awaiter",
+        importName: "__awaiter",
         scoped: false,
         priority: 5,
         text: `
             var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+                function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
                 return new (P || (P = Promise))(function (resolve, reject) {
                     function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
                     function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-                    function step(result) { result.done ? resolve(result.value) : new P(function (resolve) { resolve(result.value); }).then(fulfilled, rejected); }
+                    function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
                     step((generator = generator.apply(thisArg, _arguments || [])).next());
                 });
             };`
     };
 
-    function createAwaiterHelper(context: TransformationContext, hasLexicalArguments: boolean, promiseConstructor: EntityName | Expression, body: Block) {
+    function createAwaiterHelper(context: TransformationContext, hasLexicalThis: boolean, hasLexicalArguments: boolean, promiseConstructor: EntityName | Expression | undefined, body: Block) {
         context.requestEmitHelper(awaiterHelper);
 
         const generatorFunc = createFunctionExpression(
@@ -648,13 +826,13 @@ namespace ts {
         );
 
         // Mark this node as originally an async function
-        (generatorFunc.emitNode || (generatorFunc.emitNode = {})).flags |= EmitFlags.AsyncFunctionBody | EmitFlags.ReuseTempVariableScope;
+        (generatorFunc.emitNode || (generatorFunc.emitNode = {} as EmitNode)).flags |= EmitFlags.AsyncFunctionBody | EmitFlags.ReuseTempVariableScope;
 
         return createCall(
-            getHelperName("__awaiter"),
+            getUnscopedHelperName("__awaiter"),
             /*typeArguments*/ undefined,
             [
-                createThis(),
+                hasLexicalThis ? createThis() : createVoidZero(),
                 hasLexicalArguments ? createIdentifier("arguments") : createVoidZero(),
                 promiseConstructor ? createExpressionFromEntityName(promiseConstructor) : createVoidZero(),
                 generatorFunc
@@ -666,14 +844,14 @@ namespace ts {
         name: "typescript:async-super",
         scoped: true,
         text: helperString`
-            const ${"_super"} = name => super[name];`
+            const ${"_superIndex"} = name => super[name];`
     };
 
     export const advancedAsyncSuperHelper: EmitHelper = {
         name: "typescript:advanced-async-super",
         scoped: true,
         text: helperString`
-            const ${"_super"} = (function (geti, seti) {
+            const ${"_superIndex"} = (function (geti, seti) {
                 const cache = Object.create(null);
                 return name => cache[name] || (cache[name] = { get value() { return geti(name); }, set value(v) { seti(name, v); } });
             })(name => super[name], (name, value) => super[name] = value);`

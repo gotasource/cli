@@ -1,7 +1,7 @@
 /* @internal */
 namespace ts.DocumentHighlights {
-    export function getDocumentHighlights(program: Program, cancellationToken: CancellationToken, sourceFile: SourceFile, position: number, sourceFilesToSearch: ReadonlyArray<SourceFile>): DocumentHighlights[] | undefined {
-        const node = getTouchingPropertyName(sourceFile, position, /*includeJsDocComment*/ true);
+    export function getDocumentHighlights(program: Program, cancellationToken: CancellationToken, sourceFile: SourceFile, position: number, sourceFilesToSearch: readonly SourceFile[]): DocumentHighlights[] | undefined {
+        const node = getTouchingPropertyName(sourceFile, position);
 
         if (node.parent && (isJsxOpeningElement(node.parent) && node.parent.tagName === node || isJsxClosingElement(node.parent))) {
             // For a JSX element, just highlight the matching tag, not all references.
@@ -21,16 +21,16 @@ namespace ts.DocumentHighlights {
         };
     }
 
-    function getSemanticDocumentHighlights(position: number, node: Node, program: Program, cancellationToken: CancellationToken, sourceFilesToSearch: ReadonlyArray<SourceFile>): DocumentHighlights[] | undefined {
+    function getSemanticDocumentHighlights(position: number, node: Node, program: Program, cancellationToken: CancellationToken, sourceFilesToSearch: readonly SourceFile[]): DocumentHighlights[] | undefined {
         const sourceFilesSet = arrayToSet(sourceFilesToSearch, f => f.fileName);
         const referenceEntries = FindAllReferences.getReferenceEntriesForNode(position, node, program, sourceFilesToSearch, cancellationToken, /*options*/ undefined, sourceFilesSet);
         if (!referenceEntries) return undefined;
         const map = arrayToMultiMap(referenceEntries.map(FindAllReferences.toHighlightSpan), e => e.fileName, e => e.span);
         return arrayFrom(map.entries(), ([fileName, highlightSpans]) => {
             if (!sourceFilesSet.has(fileName)) {
-                Debug.assert(program.redirectTargetsSet.has(fileName));
+                Debug.assert(program.redirectTargetsMap.has(fileName));
                 const redirectTarget = program.getSourceFile(fileName);
-                const redirect = find(sourceFilesToSearch, f => f.redirectInfo && f.redirectInfo.redirectTarget === redirectTarget)!;
+                const redirect = find(sourceFilesToSearch, f => !!f.redirectInfo && f.redirectInfo.redirectTarget === redirectTarget)!;
                 fileName = redirect.fileName;
                 Debug.assert(sourceFilesSet.has(fileName));
             }
@@ -38,7 +38,7 @@ namespace ts.DocumentHighlights {
         });
     }
 
-    function getSyntacticDocumentHighlights(node: Node, sourceFile: SourceFile): DocumentHighlights[] {
+    function getSyntacticDocumentHighlights(node: Node, sourceFile: SourceFile): DocumentHighlights[] | undefined {
         const highlightSpans = getHighlightSpans(node, sourceFile);
         return highlightSpans && [{ fileName: sourceFile.fileName, highlightSpans }];
     }
@@ -74,22 +74,28 @@ namespace ts.DocumentHighlights {
             case SyntaxKind.GetKeyword:
             case SyntaxKind.SetKeyword:
                 return getFromAllDeclarations(isAccessor, [SyntaxKind.GetKeyword, SyntaxKind.SetKeyword]);
+            case SyntaxKind.AwaitKeyword:
+                return useParent(node.parent, isAwaitExpression, getAsyncAndAwaitOccurrences);
+            case SyntaxKind.AsyncKeyword:
+                return highlightSpans(getAsyncAndAwaitOccurrences(node));
+            case SyntaxKind.YieldKeyword:
+                return highlightSpans(getYieldOccurrences(node));
             default:
                 return isModifierKind(node.kind) && (isDeclaration(node.parent) || isVariableStatement(node.parent))
                     ? highlightSpans(getModifierOccurrences(node.kind, node.parent))
                     : undefined;
         }
 
-        function getFromAllDeclarations<T extends Node>(nodeTest: (node: Node) => node is T, keywords: ReadonlyArray<SyntaxKind>): HighlightSpan[] | undefined {
+        function getFromAllDeclarations<T extends Node>(nodeTest: (node: Node) => node is T, keywords: readonly SyntaxKind[]): HighlightSpan[] | undefined {
             return useParent(node.parent, nodeTest, decl => mapDefined(decl.symbol.declarations, d =>
                 nodeTest(d) ? find(d.getChildren(sourceFile), c => contains(keywords, c.kind)) : undefined));
         }
 
-        function useParent<T extends Node>(node: Node, nodeTest: (node: Node) => node is T, getNodes: (node: T, sourceFile: SourceFile) => ReadonlyArray<Node> | undefined): HighlightSpan[] | undefined {
+        function useParent<T extends Node>(node: Node, nodeTest: (node: Node) => node is T, getNodes: (node: T, sourceFile: SourceFile) => readonly Node[] | undefined): HighlightSpan[] | undefined {
             return nodeTest(node) ? highlightSpans(getNodes(node, sourceFile)) : undefined;
         }
 
-        function highlightSpans(nodes: ReadonlyArray<Node> | undefined): HighlightSpan[] | undefined {
+        function highlightSpans(nodes: readonly Node[] | undefined): HighlightSpan[] | undefined {
             return nodes && nodes.map(node => getHighlightSpanForNode(node, sourceFile));
         }
     }
@@ -98,7 +104,7 @@ namespace ts.DocumentHighlights {
      * Aggregates all throw-statements within this node *without* crossing
      * into function boundaries and try-blocks with catch-clauses.
      */
-    function aggregateOwnedThrowStatements(node: Node): ReadonlyArray<ThrowStatement> | undefined {
+    function aggregateOwnedThrowStatements(node: Node): readonly ThrowStatement[] | undefined {
         if (isThrowStatement(node)) {
             return [node];
         }
@@ -106,7 +112,7 @@ namespace ts.DocumentHighlights {
             // Exceptions thrown within a try block lacking a catch clause are "owned" in the current context.
             return concatenate(
                 node.catchClause ? aggregateOwnedThrowStatements(node.catchClause) : node.tryBlock && aggregateOwnedThrowStatements(node.tryBlock),
-                aggregateOwnedThrowStatements(node.finallyBlock));
+                node.finallyBlock && aggregateOwnedThrowStatements(node.finallyBlock));
         }
         // Do not cross function boundaries.
         return isFunctionLike(node) ? undefined : flatMapChildren(node, aggregateOwnedThrowStatements);
@@ -117,7 +123,7 @@ namespace ts.DocumentHighlights {
      * nearest ancestor that is a try-block (whose try statement has a catch clause),
      * function-block, or source file.
      */
-    function getThrowStatementOwner(throwStatement: ThrowStatement): Node {
+    function getThrowStatementOwner(throwStatement: ThrowStatement): Node | undefined {
         let child: Node = throwStatement;
 
         while (child.parent) {
@@ -139,11 +145,11 @@ namespace ts.DocumentHighlights {
         return undefined;
     }
 
-    function aggregateAllBreakAndContinueStatements(node: Node): ReadonlyArray<BreakOrContinueStatement> | undefined {
+    function aggregateAllBreakAndContinueStatements(node: Node): readonly BreakOrContinueStatement[] | undefined {
         return isBreakOrContinueStatement(node) ? [node] : isFunctionLike(node) ? undefined : flatMapChildren(node, aggregateAllBreakAndContinueStatements);
     }
 
-    function flatMapChildren<T>(node: Node, cb: (child: Node) => ReadonlyArray<T> | T | undefined): ReadonlyArray<T> {
+    function flatMapChildren<T>(node: Node, cb: (child: Node) => readonly T[] | T | undefined): readonly T[] {
         const result: T[] = [];
         node.forEachChild(child => {
             const value = cb(child);
@@ -156,11 +162,10 @@ namespace ts.DocumentHighlights {
 
     function ownsBreakOrContinueStatement(owner: Node, statement: BreakOrContinueStatement): boolean {
         const actualOwner = getBreakOrContinueOwner(statement);
-
-        return actualOwner && actualOwner === owner;
+        return !!actualOwner && actualOwner === owner;
     }
 
-    function getBreakOrContinueOwner(statement: BreakOrContinueStatement): Node {
+    function getBreakOrContinueOwner(statement: BreakOrContinueStatement): Node | undefined {
         return findAncestor(statement, node => {
             switch (node.kind) {
                 case SyntaxKind.SwitchStatement:
@@ -168,6 +173,7 @@ namespace ts.DocumentHighlights {
                         return false;
                     }
                     // falls through
+
                 case SyntaxKind.ForStatement:
                 case SyntaxKind.ForInStatement:
                 case SyntaxKind.ForOfStatement:
@@ -177,25 +183,18 @@ namespace ts.DocumentHighlights {
                 default:
                     // Don't cross function boundaries.
                     // TODO: GH#20090
-                    return (isFunctionLike(node) && "quit") as false | "quit";
+                    return isFunctionLike(node) && "quit";
             }
         });
     }
 
-    function getModifierOccurrences(modifier: SyntaxKind, declaration: Node): Node[] {
-        const modifierFlag = modifierToFlag(modifier);
-        return mapDefined(getNodesToSearchForModifier(declaration, modifierFlag), node => {
-            if (getModifierFlags(node) & modifierFlag) {
-                const mod = find(node.modifiers, m => m.kind === modifier);
-                Debug.assert(!!mod);
-                return mod;
-            }
-        });
+    function getModifierOccurrences(modifier: Modifier["kind"], declaration: Node): Node[] {
+        return mapDefined(getNodesToSearchForModifier(declaration, modifierToFlag(modifier)), node => findModifier(node, modifier));
     }
 
-    function getNodesToSearchForModifier(declaration: Node, modifierFlag: ModifierFlags): ReadonlyArray<Node> {
+    function getNodesToSearchForModifier(declaration: Node, modifierFlag: ModifierFlags): readonly Node[] | undefined {
         // Types of node whose children might have modifiers.
-        const container = declaration.parent as ModuleBlock | SourceFile | Block | CaseClause | DefaultClause | ConstructorDeclaration | MethodDeclaration | FunctionDeclaration | ClassLikeDeclaration;
+        const container = declaration.parent as ModuleBlock | SourceFile | Block | CaseClause | DefaultClause | ConstructorDeclaration | MethodDeclaration | FunctionDeclaration | ObjectTypeDeclaration;
         switch (container.kind) {
             case SyntaxKind.ModuleBlock:
             case SyntaxKind.SourceFile:
@@ -211,16 +210,17 @@ namespace ts.DocumentHighlights {
                 }
             case SyntaxKind.Constructor:
             case SyntaxKind.MethodDeclaration:
-            case SyntaxKind.FunctionDeclaration: {
+            case SyntaxKind.FunctionDeclaration:
                 return [...container.parameters, ...(isClassLike(container.parent) ? container.parent.members : [])];
-            }
             case SyntaxKind.ClassDeclaration:
             case SyntaxKind.ClassExpression:
+            case SyntaxKind.InterfaceDeclaration:
+            case SyntaxKind.TypeLiteral:
                 const nodes = container.members;
 
                 // If we're an accessibility modifier, we're in an instance member and should search
                 // the constructor's parameter list for instance members as well.
-                if (modifierFlag & ModifierFlags.AccessibilityModifier) {
+                if (modifierFlag & (ModifierFlags.AccessibilityModifier | ModifierFlags.Readonly)) {
                     const constructor = find(container.members, isConstructorDeclaration);
                     if (constructor) {
                         return [...nodes, ...constructor.parameters];
@@ -235,7 +235,7 @@ namespace ts.DocumentHighlights {
         }
     }
 
-    function pushKeywordIf(keywordList: Push<Node>, token: Node, ...expected: SyntaxKind[]): boolean {
+    function pushKeywordIf(keywordList: Push<Node>, token: Node | undefined, ...expected: SyntaxKind[]): boolean {
         if (token && contains(expected, token.kind)) {
             keywordList.push(token);
             return true;
@@ -269,7 +269,7 @@ namespace ts.DocumentHighlights {
         return keywords;
     }
 
-    function getBreakOrContinueStatementOccurrences(breakOrContinueStatement: BreakOrContinueStatement): Node[] {
+    function getBreakOrContinueStatementOccurrences(breakOrContinueStatement: BreakOrContinueStatement): Node[] | undefined {
         const owner = getBreakOrContinueOwner(breakOrContinueStatement);
 
         if (owner) {
@@ -318,14 +318,14 @@ namespace ts.DocumentHighlights {
         }
 
         if (tryStatement.finallyBlock) {
-            const finallyKeyword = findChildOfKind(tryStatement, SyntaxKind.FinallyKeyword, sourceFile);
+            const finallyKeyword = findChildOfKind(tryStatement, SyntaxKind.FinallyKeyword, sourceFile)!;
             pushKeywordIf(keywords, finallyKeyword, SyntaxKind.FinallyKeyword);
         }
 
         return keywords;
     }
 
-    function getThrowOccurrences(throwStatement: ThrowStatement, sourceFile: SourceFile): Node[] {
+    function getThrowOccurrences(throwStatement: ThrowStatement, sourceFile: SourceFile): Node[] | undefined {
         const owner = getThrowStatementOwner(throwStatement);
 
         if (!owner) {
@@ -361,11 +361,64 @@ namespace ts.DocumentHighlights {
         });
 
         // Include 'throw' statements that do not occur within a try block.
-        forEach(aggregateOwnedThrowStatements(func.body), throwStatement => {
+        forEach(aggregateOwnedThrowStatements(func.body!), throwStatement => {
             keywords.push(findChildOfKind(throwStatement, SyntaxKind.ThrowKeyword, sourceFile)!);
         });
 
         return keywords;
+    }
+
+    function getAsyncAndAwaitOccurrences(node: Node): Node[] | undefined {
+        const func = <FunctionLikeDeclaration>getContainingFunction(node);
+        if (!func) {
+            return undefined;
+        }
+
+        const keywords: Node[] = [];
+
+        if (func.modifiers) {
+            func.modifiers.forEach(modifier => {
+                pushKeywordIf(keywords, modifier, SyntaxKind.AsyncKeyword);
+            });
+        }
+
+        forEachChild(func, child => {
+            traverseWithoutCrossingFunction(child, node => {
+                if (isAwaitExpression(node)) {
+                    pushKeywordIf(keywords, node.getFirstToken(), SyntaxKind.AwaitKeyword);
+                }
+            });
+        });
+
+
+        return keywords;
+    }
+
+    function getYieldOccurrences(node: Node): Node[] | undefined {
+        const func = getContainingFunction(node) as FunctionDeclaration;
+        if (!func) {
+            return undefined;
+        }
+
+        const keywords: Node[] = [];
+
+        forEachChild(func, child => {
+            traverseWithoutCrossingFunction(child, node => {
+                if (isYieldExpression(node)) {
+                    pushKeywordIf(keywords, node.getFirstToken(), SyntaxKind.YieldKeyword);
+                }
+            });
+        });
+
+        return keywords;
+    }
+
+    // Do not cross function/class/interface/module/type boundaries.
+    function traverseWithoutCrossingFunction(node: Node, cb: (node: Node) => void) {
+        cb(node);
+        if (!isFunctionLike(node) && !isClassLike(node) && !isInterfaceDeclaration(node) && !isModuleDeclaration(node) && !isTypeAliasDeclaration(node) && !isTypeNode(node)) {
+            forEachChild(node, child => traverseWithoutCrossingFunction(child, cb));
+        }
     }
 
     function getIfElseOccurrences(ifStatement: IfStatement, sourceFile: SourceFile): HighlightSpan[] {

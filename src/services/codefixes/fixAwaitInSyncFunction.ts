@@ -15,11 +15,14 @@ namespace ts.codefix {
             return [createCodeFixAction(fixId, changes, Diagnostics.Add_async_modifier_to_containing_function, fixId, Diagnostics.Add_all_missing_async_modifiers)];
         },
         fixIds: [fixId],
-        getAllCodeActions: context => codeFixAll(context, errorCodes, (changes, diag) => {
-            const nodes = getNodes(diag.file, diag.start);
-            if (!nodes) return;
-            doChange(changes, context.sourceFile, nodes);
-        }),
+        getAllCodeActions: context => {
+            const seen = createMap<true>();
+            return codeFixAll(context, errorCodes, (changes, diag) => {
+                const nodes = getNodes(diag.file, diag.start);
+                if (!nodes || !addToSeen(seen, getNodeId(nodes.insertBefore))) return;
+                doChange(changes, context.sourceFile, nodes);
+            });
+        },
     });
 
     function getReturnType(expr: FunctionDeclaration | MethodDeclaration | FunctionExpression | ArrowFunction) {
@@ -34,7 +37,7 @@ namespace ts.codefix {
     }
 
     function getNodes(sourceFile: SourceFile, start: number): { insertBefore: Node, returnType: TypeNode | undefined } | undefined {
-        const token = getTokenAtPosition(sourceFile, start, /*includeJsDocComment*/ false);
+        const token = getTokenAtPosition(sourceFile, start);
         const containingFunction = getContainingFunction(token);
         if (!containingFunction) {
             return;
@@ -56,7 +59,7 @@ namespace ts.codefix {
                 return;
         }
 
-        return {
+        return insertBefore && {
             insertBefore,
             returnType: getReturnType(containingFunction)
         };
@@ -65,7 +68,7 @@ namespace ts.codefix {
     function doChange(
         changes: textChanges.ChangeTracker,
         sourceFile: SourceFile,
-        { insertBefore, returnType }: { insertBefore: Node | undefined, returnType: TypeNode | undefined }): void {
+        { insertBefore, returnType }: { insertBefore: Node, returnType: TypeNode | undefined }): void {
 
         if (returnType) {
             const entityName = getEntityNameFromTypeNode(returnType);

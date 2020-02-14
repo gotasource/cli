@@ -6,8 +6,7 @@ type ObjType1 = { x: number; y: string; z: boolean }
 >z : boolean
 
 type TupleType1 = [ObjType1, number, string]
->TupleType1 : [ObjType1, number, string]
->ObjType1 : ObjType1
+>TupleType1 : TupleType1
 
 class C1 {
 >C1 : C1
@@ -18,7 +17,6 @@ class C1 {
 >x3 : any
 >y : number
 >z : string
->TupleType1 : [ObjType1, number, string]
 
         var foo: any = x1 || x2 || x3 || y || z;
 >foo : any

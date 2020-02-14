@@ -3,8 +3,23 @@
  */
 namespace utils {
     const testPathPrefixRegExp = /(?:(file:\/{3})|\/)\.(ts|lib|src)\//g;
-    export function removeTestPathPrefixes(text: string, retainTrailingDirectorySeparator?: boolean) {
-        return text !== undefined ? text.replace(testPathPrefixRegExp, (_, scheme) => scheme || (retainTrailingDirectorySeparator ? "/" : "")) : undefined;
+    export function removeTestPathPrefixes(text: string, retainTrailingDirectorySeparator?: boolean): string {
+        return text !== undefined ? text.replace(testPathPrefixRegExp, (_, scheme) => scheme || (retainTrailingDirectorySeparator ? "/" : "")) : undefined!; // TODO: GH#18217
+    }
+
+    function createDiagnosticMessageReplacer<R extends (messageArgs: string[], ...args: string[]) => string[]>(diagnosticMessage: ts.DiagnosticMessage, replacer: R) {
+        const messageParts = diagnosticMessage.message.split(/{\d+}/g);
+        const regExp = new RegExp(`^(?:${messageParts.map(ts.regExpEscape).join("(.*?)")})$`);
+        type Args<R> = R extends (messageArgs: string[], ...args: infer A) => string[] ? A : [];
+        return (text: string, ...args: Args<R>) => text.replace(regExp, (_, ...fixedArgs) => ts.formatStringFromArgs(diagnosticMessage.message, replacer(fixedArgs, ...args)));
+    }
+
+    const replaceTypesVersionsMessage = createDiagnosticMessageReplacer(
+        ts.Diagnostics.package_json_has_a_typesVersions_entry_0_that_matches_compiler_version_1_looking_for_a_pattern_to_match_module_name_2,
+        ([entry, , moduleName], compilerVersion) => [entry, compilerVersion, moduleName]);
+
+    export function sanitizeTraceResolutionLogEntry(text: string) {
+        return text && removeTestPathPrefixes(replaceTypesVersionsMessage(text, "3.1.0-dev"));
     }
 
     /**
@@ -49,7 +64,7 @@ namespace utils {
     }
 
     function guessIndentation(lines: string[]) {
-        let indentation: number;
+        let indentation: number | undefined;
         for (const line of lines) {
             for (let i = 0; i < line.length && (indentation === undefined || i < indentation); i++) {
                 if (!ts.isWhiteSpaceLike(line.charCodeAt(i))) {
@@ -61,10 +76,6 @@ namespace utils {
             }
         }
         return indentation;
-    }
-
-    export function toUtf8(text: string): string {
-        return new Buffer(text).toString("utf8");
     }
 
     export function getByteOrderMarkLength(text: string): number {
@@ -85,5 +96,17 @@ namespace utils {
 
     export function addUTF8ByteOrderMark(text: string) {
         return getByteOrderMarkLength(text) === 0 ? "\u00EF\u00BB\u00BF" + text : text;
+    }
+
+    export function theory<T extends any[]>(name: string, cb: (...args: T) => void, data: T[]) {
+        for (const entry of data) {
+            it(`${name}(${entry.map(formatTheoryDatum).join(", ")})`, () => cb(...entry));
+        }
+    }
+
+    function formatTheoryDatum(value: any) {
+        return typeof value === "function" ? value.name || "<anonymous function>" :
+            value === undefined ? "undefined" :
+            JSON.stringify(value);
     }
 }

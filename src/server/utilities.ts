@@ -17,7 +17,7 @@ namespace ts.server {
         startGroup(): void;
         endGroup(): void;
         msg(s: string, type?: Msg): void;
-        getLogFileName(): string;
+        getLogFileName(): string | undefined;
     }
 
     // TODO: Use a const enum (https://github.com/Microsoft/TypeScript/issues/16804)
@@ -56,30 +56,6 @@ namespace ts.server {
         }
     }
 
-    export function getDefaultFormatCodeSettings(host: ServerHost): FormatCodeSettings {
-        return {
-            indentSize: 4,
-            tabSize: 4,
-            newLineCharacter: host.newLine || "\n",
-            convertTabsToSpaces: true,
-            indentStyle: IndentStyle.Smart,
-            insertSpaceAfterConstructor: false,
-            insertSpaceAfterCommaDelimiter: true,
-            insertSpaceAfterSemicolonInForStatements: true,
-            insertSpaceBeforeAndAfterBinaryOperators: true,
-            insertSpaceAfterKeywordsInControlFlowStatements: true,
-            insertSpaceAfterFunctionKeywordForAnonymousFunctions: false,
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis: false,
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets: false,
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces: true,
-            insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces: false,
-            insertSpaceAfterOpeningAndBeforeClosingJsxExpressionBraces: false,
-            insertSpaceBeforeFunctionParenthesis: false,
-            placeOpenBraceOnNewLineForFunctions: false,
-            placeOpenBraceOnNewLineForControlBlocks: false,
-        };
-    }
-
     export type NormalizedPath = string & { __normalizedPathTag: any };
 
     export function toNormalizedPath(fileName: string): NormalizedPath {
@@ -96,7 +72,7 @@ namespace ts.server {
     }
 
     export interface NormalizedPathMap<T> {
-        get(path: NormalizedPath): T;
+        get(path: NormalizedPath): T | undefined;
         set(path: NormalizedPath, value: T): void;
         contains(path: NormalizedPath): boolean;
         remove(path: NormalizedPath): void;
@@ -120,6 +96,7 @@ namespace ts.server {
         };
     }
 
+    /*@internal*/
     export interface ProjectOptions {
         configHasExtendsProperty: boolean;
         /**
@@ -128,16 +105,6 @@ namespace ts.server {
         configHasFilesProperty: boolean;
         configHasIncludeProperty: boolean;
         configHasExcludeProperty: boolean;
-
-        projectReferences: ReadonlyArray<ProjectReference> | undefined;
-        /**
-         * these fields can be present in the project file
-         */
-        files?: string[];
-        wildcardDirectories?: Map<WatchDirectoryFlags>;
-        compilerOptions?: CompilerOptions;
-        typeAcquisition?: TypeAcquisition;
-        compileOnSave?: boolean;
     }
 
     export function isInferredProjectName(name: string) {
@@ -150,7 +117,7 @@ namespace ts.server {
     }
 
     export function createSortedArray<T>(): SortedArray<T> {
-        return [] as SortedArray<T>;
+        return [] as any as SortedArray<T>; // TODO: GH#19873
     }
 }
 
@@ -160,7 +127,7 @@ namespace ts.server {
         private readonly pendingTimeouts: Map<any> = createMap<any>();
         private readonly logger?: Logger | undefined;
         constructor(private readonly host: ServerHost, logger: Logger) {
-            this.logger = logger.hasLevel(LogLevel.verbose) && logger;
+            this.logger = logger.hasLevel(LogLevel.verbose) ? logger : undefined;
         }
 
         /**
@@ -183,11 +150,13 @@ namespace ts.server {
         }
 
         private static run(self: ThrottledOperations, operationId: string, cb: () => void) {
+            perfLogger.logStartScheduledOperation(operationId);
             self.pendingTimeouts.delete(operationId);
             if (self.logger) {
                 self.logger.info(`Running: ${operationId}`);
             }
             cb();
+            perfLogger.logStopScheduledOperation();
         }
     }
 
@@ -207,14 +176,16 @@ namespace ts.server {
         private static run(self: GcTimer) {
             self.timerId = undefined;
 
+            perfLogger.logStartScheduledOperation("GC collect");
             const log = self.logger.hasLevel(LogLevel.requestTime);
-            const before = log && self.host.getMemoryUsage();
+            const before = log && self.host.getMemoryUsage!(); // TODO: GH#18217
 
-            self.host.gc();
+            self.host.gc!(); // TODO: GH#18217
             if (log) {
-                const after = self.host.getMemoryUsage();
+                const after = self.host.getMemoryUsage!(); // TODO: GH#18217
                 self.logger.perftrc(`GC::before ${before}, after ${after}`);
             }
+            perfLogger.logStopScheduledOperation();
         }
     }
 
@@ -239,30 +210,28 @@ namespace ts.server {
         }
     }
 
-    export function toSortedArray(arr: string[]): SortedArray<string>;
-    export function toSortedArray<T>(arr: T[], comparer: Comparer<T>): SortedArray<T>;
-    export function toSortedArray<T>(arr: T[], comparer?: Comparer<T>): SortedArray<T> {
-        arr.sort(comparer);
-        return arr as SortedArray<T>;
-    }
+    const indentStr = "\n    ";
 
-    export function toDeduplicatedSortedArray(arr: string[]): SortedArray<string> {
-        arr.sort();
-        filterMutate(arr, isNonDuplicateInSortedArray);
-        return arr as SortedArray<string>;
-    }
-    function isNonDuplicateInSortedArray<T>(value: T, index: number, array: T[]) {
-        return index === 0 || value !== array[index - 1];
-    }
-
-    /* @internal */
     export function indent(str: string): string {
-        return "\n    " + str;
+        return indentStr + str.replace(/\n/g, indentStr);
     }
 
     /** Put stringified JSON on the next line, indented. */
-    /* @internal */
     export function stringifyIndented(json: {}): string {
-        return "\n    " + JSON.stringify(json);
+        return indentStr + JSON.stringify(json);
+    }
+}
+
+/* @internal */
+namespace ts {
+    // Additional tsserver specific watch information
+    export const enum WatchType {
+        ClosedScriptInfo = "Closed Script info",
+        ConfigFileForInferredRoot = "Config file for the inferred project root",
+        NodeModulesForClosedScriptInfo = "node_modules for closed script infos in them",
+        MissingSourceMapFile = "Missing source map file",
+        NoopConfigFileForInferredRoot = "Noop Config file for the inferred project root",
+        MissingGeneratedFile = "Missing generated file",
+        PackageJsonFile = "package.json file for import suggestions"
     }
 }

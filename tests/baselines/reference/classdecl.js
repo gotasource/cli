@@ -95,9 +95,12 @@ class e {
 
 //// [classdecl.js]
 var __extends = (this && this.__extends) || (function () {
-    var extendStatics = Object.setPrototypeOf ||
-        ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
-        function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
+    var extendStatics = function (d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
     return function (d, b) {
         extendStatics(d, b);
         function __() { this.constructor = d; }
@@ -215,13 +218,14 @@ declare class a {
     constructor(s: string);
     pgF(): void;
     pv: any;
-    d: number;
-    static readonly p2: {
+    get d(): number;
+    set d(a: number);
+    static get p2(): {
         x: number;
         y: number;
     };
     private static d2;
-    private static readonly p3;
+    private static get p3();
     private pv3;
     private foo;
 }

@@ -9,7 +9,7 @@ namespace ts {
      * @param test A callback to execute to verify the Node is valid.
      * @param lift An optional callback to execute to lift a NodeArray into a valid Node.
      */
-    export function visitNode<T extends Node>(node: T, visitor: Visitor, test?: (node: Node) => boolean, lift?: (node: NodeArray<Node>) => T): T;
+    export function visitNode<T extends Node>(node: T | undefined, visitor: Visitor | undefined, test?: (node: Node) => boolean, lift?: (node: NodeArray<Node>) => T): T;
 
     /**
      * Visits a Node using the supplied visitor, possibly returning a new Node in its place.
@@ -19,9 +19,9 @@ namespace ts {
      * @param test A callback to execute to verify the Node is valid.
      * @param lift An optional callback to execute to lift a NodeArray into a valid Node.
      */
-    export function visitNode<T extends Node>(node: T | undefined, visitor: Visitor, test?: (node: Node) => boolean, lift?: (node: NodeArray<Node>) => T): T | undefined;
+    export function visitNode<T extends Node>(node: T | undefined, visitor: Visitor | undefined, test?: (node: Node) => boolean, lift?: (node: NodeArray<Node>) => T): T | undefined;
 
-    export function visitNode<T extends Node>(node: T | undefined, visitor: Visitor, test?: (node: Node) => boolean, lift?: (node: NodeArray<Node>) => T): T | undefined {
+    export function visitNode<T extends Node>(node: T | undefined, visitor: Visitor | undefined, test?: (node: Node) => boolean, lift?: (node: NodeArray<Node>) => T): T | undefined {
         if (node === undefined || visitor === undefined) {
             return node;
         }
@@ -32,7 +32,7 @@ namespace ts {
             return node;
         }
 
-        let visitedNode: Node;
+        let visitedNode: Node | undefined;
         if (visited === undefined) {
             return undefined;
         }
@@ -44,7 +44,7 @@ namespace ts {
         }
 
         Debug.assertNode(visitedNode, test);
-        aggregateTransformFlags(visitedNode);
+        aggregateTransformFlags(visitedNode!);
         return <T>visitedNode;
     }
 
@@ -57,7 +57,7 @@ namespace ts {
      * @param start An optional value indicating the starting offset at which to start visiting.
      * @param count An optional value indicating the maximum number of nodes to visit.
      */
-    export function visitNodes<T extends Node>(nodes: NodeArray<T>, visitor: Visitor, test?: (node: Node) => boolean, start?: number, count?: number): NodeArray<T>;
+    export function visitNodes<T extends Node>(nodes: NodeArray<T> | undefined, visitor: Visitor, test?: (node: Node) => boolean, start?: number, count?: number): NodeArray<T>;
 
     /**
      * Visits a NodeArray using the supplied visitor, possibly returning a new NodeArray in its place.
@@ -84,7 +84,7 @@ namespace ts {
             return nodes;
         }
 
-        let updated: MutableNodeArray<T>;
+        let updated: MutableNodeArray<T> | undefined;
 
         // Ensure start and count have valid values
         const length = nodes.length;
@@ -141,18 +141,15 @@ namespace ts {
     export function visitLexicalEnvironment(statements: NodeArray<Statement>, visitor: Visitor, context: TransformationContext, start?: number, ensureUseStrict?: boolean) {
         context.startLexicalEnvironment();
         statements = visitNodes(statements, visitor, isStatement, start);
-        if (ensureUseStrict && !startsWithUseStrict(statements)) {
-            statements = setTextRange(createNodeArray([createStatement(createLiteral("use strict")), ...statements]), statements);
-        }
-        const declarations = context.endLexicalEnvironment();
-        return setTextRange(createNodeArray(concatenate(statements, declarations)), statements);
+        if (ensureUseStrict) statements = ts.ensureUseStrict(statements); // eslint-disable-line @typescript-eslint/no-unnecessary-qualifier
+        return mergeLexicalEnvironment(statements, context.endLexicalEnvironment());
     }
 
     /**
      * Starts a new lexical environment and visits a parameter list, suspending the lexical
      * environment upon completion.
      */
-    export function visitParameterList(nodes: NodeArray<ParameterDeclaration>, visitor: Visitor, context: TransformationContext, nodesVisitor = visitNodes) {
+    export function visitParameterList(nodes: NodeArray<ParameterDeclaration> | undefined, visitor: Visitor, context: TransformationContext, nodesVisitor = visitNodes) {
         context.startLexicalEnvironment();
         const updated = nodesVisitor(nodes, visitor, isParameterDeclaration);
         context.suspendLexicalEnvironment();
@@ -174,7 +171,7 @@ namespace ts {
      * environment and merging hoisted declarations upon completion.
      */
     export function visitFunctionBody(node: ConciseBody, visitor: Visitor, context: TransformationContext): ConciseBody;
-    export function visitFunctionBody(node: ConciseBody, visitor: Visitor, context: TransformationContext): ConciseBody {
+    export function visitFunctionBody(node: ConciseBody | undefined, visitor: Visitor, context: TransformationContext): ConciseBody | undefined {
         context.resumeLexicalEnvironment();
         const updated = visitNode(node, visitor, isConciseBody);
         const declarations = context.endLexicalEnvironment();
@@ -204,7 +201,7 @@ namespace ts {
      */
     export function visitEachChild<T extends Node>(node: T | undefined, visitor: Visitor, context: TransformationContext, nodesVisitor?: typeof visitNodes, tokenVisitor?: Visitor): T | undefined;
 
-    export function visitEachChild(node: Node, visitor: Visitor, context: TransformationContext, nodesVisitor = visitNodes, tokenVisitor?: Visitor): Node {
+    export function visitEachChild(node: Node | undefined, visitor: Visitor, context: TransformationContext, nodesVisitor = visitNodes, tokenVisitor?: Visitor): Node | undefined {
         if (node === undefined) {
             return undefined;
         }
@@ -232,7 +229,6 @@ namespace ts {
                     visitNode((<ComputedPropertyName>node).expression, visitor, isExpression));
 
             // Signature elements
-
             case SyntaxKind.TypeParameter:
                 return updateTypeParameterDeclaration(<TypeParameterDeclaration>node,
                     visitNode((<TypeParameterDeclaration>node).name, visitor, isIdentifier),
@@ -254,7 +250,6 @@ namespace ts {
                     visitNode((<Decorator>node).expression, visitor, isExpression));
 
             // Type elements
-
             case SyntaxKind.PropertySignature:
                 return updatePropertySignature((<PropertySignature>node),
                     nodesVisitor((<PropertySignature>node).modifiers, visitor, isToken),
@@ -268,7 +263,8 @@ namespace ts {
                     nodesVisitor((<PropertyDeclaration>node).decorators, visitor, isDecorator),
                     nodesVisitor((<PropertyDeclaration>node).modifiers, visitor, isModifier),
                     visitNode((<PropertyDeclaration>node).name, visitor, isPropertyName),
-                    visitNode((<PropertyDeclaration>node).questionToken, tokenVisitor, isToken),
+                    // QuestionToken and ExclamationToken is uniqued in Property Declaration and the signature of 'updateProperty' is that too
+                    visitNode((<PropertyDeclaration>node).questionToken || (<PropertyDeclaration>node).exclamationToken, tokenVisitor, isToken),
                     visitNode((<PropertyDeclaration>node).type, visitor, isTypeNode),
                     visitNode((<PropertyDeclaration>node).initializer, visitor, isExpression));
 
@@ -290,14 +286,14 @@ namespace ts {
                     nodesVisitor((<MethodDeclaration>node).typeParameters, visitor, isTypeParameterDeclaration),
                     visitParameterList((<MethodDeclaration>node).parameters, visitor, context, nodesVisitor),
                     visitNode((<MethodDeclaration>node).type, visitor, isTypeNode),
-                    visitFunctionBody((<MethodDeclaration>node).body, visitor, context));
+                    visitFunctionBody((<MethodDeclaration>node).body!, visitor, context));
 
             case SyntaxKind.Constructor:
                 return updateConstructor(<ConstructorDeclaration>node,
                     nodesVisitor((<ConstructorDeclaration>node).decorators, visitor, isDecorator),
                     nodesVisitor((<ConstructorDeclaration>node).modifiers, visitor, isModifier),
                     visitParameterList((<ConstructorDeclaration>node).parameters, visitor, context, nodesVisitor),
-                    visitFunctionBody((<ConstructorDeclaration>node).body, visitor, context));
+                    visitFunctionBody((<ConstructorDeclaration>node).body!, visitor, context));
 
             case SyntaxKind.GetAccessor:
                 return updateGetAccessor(<GetAccessorDeclaration>node,
@@ -306,7 +302,7 @@ namespace ts {
                     visitNode((<GetAccessorDeclaration>node).name, visitor, isPropertyName),
                     visitParameterList((<GetAccessorDeclaration>node).parameters, visitor, context, nodesVisitor),
                     visitNode((<GetAccessorDeclaration>node).type, visitor, isTypeNode),
-                    visitFunctionBody((<GetAccessorDeclaration>node).body, visitor, context));
+                    visitFunctionBody((<GetAccessorDeclaration>node).body!, visitor, context));
 
             case SyntaxKind.SetAccessor:
                 return updateSetAccessor(<SetAccessorDeclaration>node,
@@ -314,7 +310,7 @@ namespace ts {
                     nodesVisitor((<SetAccessorDeclaration>node).modifiers, visitor, isModifier),
                     visitNode((<SetAccessorDeclaration>node).name, visitor, isPropertyName),
                     visitParameterList((<SetAccessorDeclaration>node).parameters, visitor, context, nodesVisitor),
-                    visitFunctionBody((<SetAccessorDeclaration>node).body, visitor, context));
+                    visitFunctionBody((<SetAccessorDeclaration>node).body!, visitor, context));
 
             case SyntaxKind.CallSignature:
                 return updateCallSignature(<CallSignatureDeclaration>node,
@@ -336,9 +332,9 @@ namespace ts {
                     visitNode((<IndexSignatureDeclaration>node).type, visitor, isTypeNode));
 
             // Types
-
             case SyntaxKind.TypePredicate:
-                return updateTypePredicateNode(<TypePredicateNode>node,
+                return updateTypePredicateNodeWithModifier(<TypePredicateNode>node,
+                    visitNode((<TypePredicateNode>node).assertsModifier, visitor),
                     visitNode((<TypePredicateNode>node).parameterName, visitor),
                     visitNode((<TypePredicateNode>node).type, visitor, isTypeNode));
 
@@ -372,8 +368,16 @@ namespace ts {
                     visitNode((<ArrayTypeNode>node).elementType, visitor, isTypeNode));
 
             case SyntaxKind.TupleType:
-                return updateTypleTypeNode((<TupleTypeNode>node),
+                return updateTupleTypeNode((<TupleTypeNode>node),
                     nodesVisitor((<TupleTypeNode>node).elementTypes, visitor, isTypeNode));
+
+            case SyntaxKind.OptionalType:
+                return updateOptionalTypeNode((<OptionalTypeNode>node),
+                    visitNode((<OptionalTypeNode>node).type, visitor, isTypeNode));
+
+            case SyntaxKind.RestType:
+                return updateRestTypeNode((<RestTypeNode>node),
+                    visitNode((<RestTypeNode>node).type, visitor, isTypeNode));
 
             case SyntaxKind.UnionType:
                 return updateUnionTypeNode(<UnionTypeNode>node,
@@ -427,7 +431,6 @@ namespace ts {
                     visitNode((<LiteralTypeNode>node).literal, visitor, isExpression));
 
             // Binding patterns
-
             case SyntaxKind.ObjectBindingPattern:
                 return updateObjectBindingPattern(<ObjectBindingPattern>node,
                     nodesVisitor((<ObjectBindingPattern>node).elements, visitor, isBindingElement));
@@ -444,7 +447,6 @@ namespace ts {
                     visitNode((<BindingElement>node).initializer, visitor, isExpression));
 
             // Expression
-
             case SyntaxKind.ArrayLiteralExpression:
                 return updateArrayLiteral(<ArrayLiteralExpression>node,
                     nodesVisitor((<ArrayLiteralExpression>node).elements, visitor, isExpression));
@@ -454,16 +456,35 @@ namespace ts {
                     nodesVisitor((<ObjectLiteralExpression>node).properties, visitor, isObjectLiteralElementLike));
 
             case SyntaxKind.PropertyAccessExpression:
+                if (node.flags & NodeFlags.OptionalChain) {
+                    return updatePropertyAccessChain(<PropertyAccessChain>node,
+                        visitNode((<PropertyAccessChain>node).expression, visitor, isExpression),
+                        visitNode((<PropertyAccessChain>node).questionDotToken, visitor, isToken),
+                        visitNode((<PropertyAccessChain>node).name, visitor, isIdentifier));
+                }
                 return updatePropertyAccess(<PropertyAccessExpression>node,
                     visitNode((<PropertyAccessExpression>node).expression, visitor, isExpression),
                     visitNode((<PropertyAccessExpression>node).name, visitor, isIdentifier));
 
             case SyntaxKind.ElementAccessExpression:
+                if (node.flags & NodeFlags.OptionalChain) {
+                    return updateElementAccessChain(<ElementAccessChain>node,
+                        visitNode((<ElementAccessChain>node).expression, visitor, isExpression),
+                        visitNode((<ElementAccessChain>node).questionDotToken, visitor, isToken),
+                        visitNode((<ElementAccessChain>node).argumentExpression, visitor, isExpression));
+                }
                 return updateElementAccess(<ElementAccessExpression>node,
                     visitNode((<ElementAccessExpression>node).expression, visitor, isExpression),
                     visitNode((<ElementAccessExpression>node).argumentExpression, visitor, isExpression));
 
             case SyntaxKind.CallExpression:
+                if (node.flags & NodeFlags.OptionalChain) {
+                    return updateCallChain(<CallChain>node,
+                        visitNode((<CallChain>node).expression, visitor, isExpression),
+                        visitNode((<CallChain>node).questionDotToken, visitor, isToken),
+                        nodesVisitor((<CallChain>node).typeArguments, visitor, isTypeNode),
+                        nodesVisitor((<CallChain>node).arguments, visitor, isExpression));
+                }
                 return updateCall(<CallExpression>node,
                     visitNode((<CallExpression>node).expression, visitor, isExpression),
                     nodesVisitor((<CallExpression>node).typeArguments, visitor, isTypeNode),
@@ -588,14 +609,12 @@ namespace ts {
                     visitNode((<MetaProperty>node).name, visitor, isIdentifier));
 
             // Misc
-
             case SyntaxKind.TemplateSpan:
                 return updateTemplateSpan(<TemplateSpan>node,
                     visitNode((<TemplateSpan>node).expression, visitor, isExpression),
                     visitNode((<TemplateSpan>node).literal, visitor, isTemplateMiddleOrTemplateTail));
 
             // Element
-
             case SyntaxKind.Block:
                 return updateBlock(<Block>node,
                     nodesVisitor((<Block>node).statements, visitor, isStatement));
@@ -606,7 +625,7 @@ namespace ts {
                     visitNode((<VariableStatement>node).declarationList, visitor, isVariableDeclarationList));
 
             case SyntaxKind.ExpressionStatement:
-                return updateStatement(<ExpressionStatement>node,
+                return updateExpressionStatement(<ExpressionStatement>node,
                     visitNode((<ExpressionStatement>node).expression, visitor, isExpression));
 
             case SyntaxKind.IfStatement:
@@ -810,13 +829,11 @@ namespace ts {
                     visitNode((<ExportSpecifier>node).name, visitor, isIdentifier));
 
             // Module references
-
             case SyntaxKind.ExternalModuleReference:
                 return updateExternalModuleReference(<ExternalModuleReference>node,
                     visitNode((<ExternalModuleReference>node).expression, visitor, isExpression));
 
             // JSX
-
             case SyntaxKind.JsxElement:
                 return updateJsxElement(<JsxElement>node,
                     visitNode((<JsxElement>node).openingElement, visitor, isJsxOpeningElement),
@@ -863,7 +880,6 @@ namespace ts {
                     visitNode((<JsxExpression>node).expression, visitor, isExpression));
 
             // Clauses
-
             case SyntaxKind.CaseClause:
                 return updateCaseClause(<CaseClause>node,
                     visitNode((<CaseClause>node).expression, visitor, isExpression),
@@ -883,7 +899,6 @@ namespace ts {
                     visitNode((<CatchClause>node).block, visitor, isBlock));
 
             // Property assignments
-
             case SyntaxKind.PropertyAssignment:
                 return updatePropertyAssignment(<PropertyAssignment>node,
                     visitNode((<PropertyAssignment>node).name, visitor, isPropertyName),
@@ -930,7 +945,7 @@ namespace ts {
      *
      * @param nodes The NodeArray.
      */
-    function extractSingleNode(nodes: ReadonlyArray<Node>): Node {
+    function extractSingleNode(nodes: readonly Node[]): Node | undefined {
         Debug.assert(nodes.length <= 1, "Too many nodes written to output.");
         return singleOrUndefined(nodes);
     }
@@ -938,11 +953,11 @@ namespace ts {
 
 /* @internal */
 namespace ts {
-    function reduceNode<T>(node: Node, f: (memo: T, node: Node) => T, initial: T) {
+    function reduceNode<T>(node: Node | undefined, f: (memo: T, node: Node) => T, initial: T) {
         return node ? f(initial, node) : initial;
     }
 
-    function reduceNodeArray<T>(nodes: NodeArray<Node>, f: (memo: T, nodes: NodeArray<Node>) => T, initial: T) {
+    function reduceNodeArray<T>(nodes: NodeArray<Node> | undefined, f: (memo: T, nodes: NodeArray<Node>) => T, initial: T) {
         return nodes ? f(initial, nodes) : initial;
     }
 
@@ -954,12 +969,12 @@ namespace ts {
      * @param initial The initial value to supply to the reduction.
      * @param f The callback function
      */
-    export function reduceEachChild<T>(node: Node, initial: T, cbNode: (memo: T, node: Node) => T, cbNodeArray?: (memo: T, nodes: NodeArray<Node>) => T): T {
+    export function reduceEachChild<T>(node: Node | undefined, initial: T, cbNode: (memo: T, node: Node) => T, cbNodeArray?: (memo: T, nodes: NodeArray<Node>) => T): T {
         if (node === undefined) {
             return initial;
         }
 
-        const reduceNodes: (nodes: NodeArray<Node>, f: ((memo: T, node: Node) => T) | ((memo: T, node: NodeArray<Node>) => T), initial: T) => T = cbNodeArray ? reduceNodeArray : reduceLeft;
+        const reduceNodes: (nodes: NodeArray<Node> | undefined, f: ((memo: T, node: Node) => T) | ((memo: T, node: NodeArray<Node>) => T), initial: T) => T = cbNodeArray ? reduceNodeArray : reduceLeft;
         const cbNodes = cbNodeArray || cbNode;
         const kind = node.kind;
 
@@ -1008,7 +1023,6 @@ namespace ts {
                 break;
 
             // Type member
-
             case SyntaxKind.PropertySignature:
                 result = reduceNodes((<PropertySignature>node).modifiers, cbNodes, result);
                 result = reduceNode((<PropertySignature>node).name, cbNode, result);
@@ -1103,6 +1117,7 @@ namespace ts {
 
             case SyntaxKind.TaggedTemplateExpression:
                 result = reduceNode((<TaggedTemplateExpression>node).tag, cbNode, result);
+                result = reduceNodes((<TaggedTemplateExpression>node).typeArguments, cbNodes, result);
                 result = reduceNode((<TaggedTemplateExpression>node).template, cbNode, result);
                 break;
 
@@ -1369,6 +1384,7 @@ namespace ts {
             case SyntaxKind.JsxSelfClosingElement:
             case SyntaxKind.JsxOpeningElement:
                 result = reduceNode((<JsxSelfClosingElement | JsxOpeningElement>node).tagName, cbNode, result);
+                result = reduceNodes((<JsxSelfClosingElement | JsxOpeningElement>node).typeArguments, cbNode, result);
                 result = reduceNode((<JsxSelfClosingElement | JsxOpeningElement>node).attributes, cbNode, result);
                 break;
 
@@ -1456,20 +1472,20 @@ namespace ts {
     /**
      * Merges generated lexical declarations into a new statement list.
      */
-    export function mergeLexicalEnvironment(statements: NodeArray<Statement>, declarations: ReadonlyArray<Statement>): NodeArray<Statement>;
+    export function mergeLexicalEnvironment(statements: NodeArray<Statement>, declarations: readonly Statement[] | undefined): NodeArray<Statement>;
 
     /**
      * Appends generated lexical declarations to an array of statements.
      */
-    export function mergeLexicalEnvironment(statements: Statement[], declarations: ReadonlyArray<Statement>): Statement[];
-    export function mergeLexicalEnvironment(statements: Statement[] | NodeArray<Statement>, declarations: ReadonlyArray<Statement>) {
+    export function mergeLexicalEnvironment(statements: Statement[], declarations: readonly Statement[] | undefined): Statement[];
+    export function mergeLexicalEnvironment(statements: Statement[] | NodeArray<Statement>, declarations: readonly Statement[] | undefined) {
         if (!some(declarations)) {
             return statements;
         }
 
         return isNodeArray(statements)
-            ? setTextRange(createNodeArray(concatenate(statements, declarations)), statements)
-            : addRange(statements, declarations);
+            ? setTextRange(createNodeArray(insertStatementsAfterStandardPrologue(statements.slice(), declarations)), statements)
+            : insertStatementsAfterStandardPrologue(statements, declarations);
     }
 
     /**
@@ -1477,7 +1493,7 @@ namespace ts {
      *
      * @param nodes The NodeArray.
      */
-    export function liftToBlock(nodes: ReadonlyArray<Node>): Statement {
+    export function liftToBlock(nodes: readonly Node[]): Statement {
         Debug.assert(every(nodes, isStatement), "Cannot lift nodes to a Block.");
         return <Statement>singleOrUndefined(nodes) || createBlock(<NodeArray<Statement>>nodes);
     }
@@ -1546,101 +1562,5 @@ namespace ts {
 
     function aggregateTransformFlagsForChildNodes(transformFlags: TransformFlags, nodes: NodeArray<Node>): TransformFlags {
         return transformFlags | aggregateTransformFlagsForNodeArray(nodes);
-    }
-
-    export namespace Debug {
-        let isDebugInfoEnabled = false;
-
-        export function failBadSyntaxKind(node: Node, message?: string): never {
-            return fail(
-                `${message || "Unexpected node."}\r\nNode ${formatSyntaxKind(node.kind)} was unexpected.`,
-                failBadSyntaxKind);
-        }
-
-        export const assertEachNode = shouldAssert(AssertionLevel.Normal)
-            ? (nodes: Node[], test: (node: Node) => boolean, message?: string): void => assert(
-                test === undefined || every(nodes, test),
-                message || "Unexpected node.",
-                () => `Node array did not pass test '${getFunctionName(test)}'.`,
-                assertEachNode)
-            : noop;
-
-        export const assertNode = shouldAssert(AssertionLevel.Normal)
-            ? (node: Node, test: (node: Node) => boolean, message?: string): void => assert(
-                test === undefined || test(node),
-                message || "Unexpected node.",
-                () => `Node ${formatSyntaxKind(node.kind)} did not pass test '${getFunctionName(test)}'.`,
-                assertNode)
-            : noop;
-
-        export const assertOptionalNode = shouldAssert(AssertionLevel.Normal)
-            ? (node: Node, test: (node: Node) => boolean, message?: string): void => assert(
-                test === undefined || node === undefined || test(node),
-                message || "Unexpected node.",
-                () => `Node ${formatSyntaxKind(node.kind)} did not pass test '${getFunctionName(test)}'.`,
-                assertOptionalNode)
-            : noop;
-
-        export const assertOptionalToken = shouldAssert(AssertionLevel.Normal)
-            ? (node: Node, kind: SyntaxKind, message?: string): void => assert(
-                kind === undefined || node === undefined || node.kind === kind,
-                message || "Unexpected node.",
-                () => `Node ${formatSyntaxKind(node.kind)} was not a '${formatSyntaxKind(kind)}' token.`,
-                assertOptionalToken)
-            : noop;
-
-        export const assertMissingNode = shouldAssert(AssertionLevel.Normal)
-            ? (node: Node, message?: string): void => assert(
-                node === undefined,
-                message || "Unexpected node.",
-                () => `Node ${formatSyntaxKind(node.kind)} was unexpected'.`,
-                assertMissingNode)
-            : noop;
-
-        /**
-         * Injects debug information into frequently used types.
-         */
-        export function enableDebugInfo() {
-            if (isDebugInfoEnabled) return;
-
-            // Add additional properties in debug mode to assist with debugging.
-            Object.defineProperties(objectAllocator.getSymbolConstructor().prototype, {
-                __debugFlags: { get(this: Symbol) { return formatSymbolFlags(this.flags); } }
-            });
-
-            Object.defineProperties(objectAllocator.getTypeConstructor().prototype, {
-                __debugFlags: { get(this: Type) { return formatTypeFlags(this.flags); } },
-                __debugObjectFlags: { get(this: Type) { return this.flags & TypeFlags.Object ? formatObjectFlags((<ObjectType>this).objectFlags) : ""; } },
-                __debugTypeToString: { value(this: Type) { return this.checker.typeToString(this); } },
-            });
-
-            const nodeConstructors = [
-                objectAllocator.getNodeConstructor(),
-                objectAllocator.getIdentifierConstructor(),
-                objectAllocator.getTokenConstructor(),
-                objectAllocator.getSourceFileConstructor()
-            ];
-
-            for (const ctor of nodeConstructors) {
-                if (!ctor.prototype.hasOwnProperty("__debugKind")) {
-                    Object.defineProperties(ctor.prototype, {
-                        __debugKind: { get(this: Node) { return formatSyntaxKind(this.kind); } },
-                        __debugModifierFlags: { get(this: Node) { return formatModifierFlags(getModifierFlagsNoCache(this)); } },
-                        __debugTransformFlags: { get(this: Node) { return formatTransformFlags(this.transformFlags); } },
-                        __debugEmitFlags: { get(this: Node) { return formatEmitFlags(getEmitFlags(this)); } },
-                        __debugGetText: {
-                            value(this: Node, includeTrivia?: boolean) {
-                                if (nodeIsSynthesized(this)) return "";
-                                const parseNode = getParseTreeNode(this);
-                                const sourceFile = parseNode && getSourceFileOfNode(parseNode);
-                                return sourceFile ? getSourceTextOfNodeFromSourceFile(sourceFile, parseNode, includeTrivia) : "";
-                            }
-                        }
-                    });
-                }
-            }
-
-            isDebugInfoEnabled = true;
-        }
     }
 }
