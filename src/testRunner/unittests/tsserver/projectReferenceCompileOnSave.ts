@@ -1,7 +1,7 @@
 namespace ts.projectSystem {
     describe("unittests:: tsserver:: with project references and compile on save", () => {
-        const dependecyLocation = `${projectRoot}/dependency`;
-        const usageLocation = `${projectRoot}/usage`;
+        const dependecyLocation = `${tscWatch.projectRoot}/dependency`;
+        const usageLocation = `${tscWatch.projectRoot}/usage`;
         const dependencyTs: File = {
             path: `${dependecyLocation}/fns.ts`,
             content: `export function fn1() { }
@@ -293,7 +293,7 @@ exports.fn2 = fn2;
 ${appendJs}`
                     },
                     {
-                        path: `${projectRoot}/decls/fns.d.ts`,
+                        path: `${tscWatch.projectRoot}/decls/fns.d.ts`,
                         content: `export declare function fn1(): void;
 export declare function fn2(): void;
 ${appendDts}`
@@ -410,7 +410,7 @@ ${appendDts}`
     describe("unittests:: tsserver:: with project references and compile on save with external projects", () => {
         it("compile on save emits same output as project build", () => {
             const tsbaseJson: File = {
-                path: `${projectRoot}/tsbase.json`,
+                path: `${tscWatch.projectRoot}/tsbase.json`,
                 content: JSON.stringify({
                     compileOnSave: true,
                     compilerOptions: {
@@ -419,7 +419,7 @@ ${appendDts}`
                     }
                 })
             };
-            const buttonClass = `${projectRoot}/buttonClass`;
+            const buttonClass = `${tscWatch.projectRoot}/buttonClass`;
             const buttonConfig: File = {
                 path: `${buttonClass}/tsconfig.json`,
                 content: JSON.stringify({
@@ -440,7 +440,7 @@ ${appendDts}`
 }`
             };
 
-            const siblingClass = `${projectRoot}/SiblingClass`;
+            const siblingClass = `${tscWatch.projectRoot}/SiblingClass`;
             const siblingConfig: File = {
                 path: `${siblingClass}/tsconfig.json`,
                 content: JSON.stringify({

@@ -28,21 +28,21 @@ module.exports = j;
 //// [index.d.ts]
 export = j;
 declare const j: {
-    "x": number;
-    "y": number;
-    "obj": {
-        "items": ({
-            "x": number;
-            "y"?: undefined;
-            "err"?: undefined;
+    x: number;
+    y: number;
+    obj: {
+        items: ({
+            x: number;
+            y?: undefined;
+            err?: undefined;
         } | {
-            "x": number;
-            "y": number;
-            "err"?: undefined;
+            x: number;
+            y: number;
+            err?: undefined;
         } | {
-            "x": number;
-            "err": boolean;
-            "y"?: undefined;
+            x: number;
+            err: boolean;
+            y?: undefined;
         })[];
     };
 };

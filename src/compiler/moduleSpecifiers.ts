@@ -30,7 +30,7 @@ namespace ts.moduleSpecifiers {
     function getPreferencesForUpdate(compilerOptions: CompilerOptions, oldImportSpecifier: string): Preferences {
         return {
             relativePreference: isExternalModuleNameRelative(oldImportSpecifier) ? RelativePreference.Relative : RelativePreference.NonRelative,
-            ending: hasJSOrJsonFileExtension(oldImportSpecifier) ?
+            ending: hasJSFileExtension(oldImportSpecifier) ?
                 Ending.JsExtension :
                 getEmitModuleResolutionKind(compilerOptions) !== ModuleResolutionKind.NodeJs || endsWith(oldImportSpecifier, "index") ? Ending.Index : Ending.Minimal,
         };
@@ -163,7 +163,7 @@ namespace ts.moduleSpecifiers {
     }
 
     function usesJsExtensionOnImports({ imports }: SourceFile): boolean {
-        return firstDefined(imports, ({ text }) => pathIsRelative(text) ? hasJSOrJsonFileExtension(text) : undefined) || false;
+        return firstDefined(imports, ({ text }) => pathIsRelative(text) ? hasJSFileExtension(text) : undefined) || false;
     }
 
     function numberOfDirectorySeparators(str: string) {
@@ -342,7 +342,7 @@ namespace ts.moduleSpecifiers {
             // If the file is the main module, it can be imported by the package name
             if (packageJsonContent) {
                 const mainFileRelative = packageJsonContent.typings || packageJsonContent.types || packageJsonContent.main;
-                if (mainFileRelative) {
+                if (isString(mainFileRelative)) {
                     const mainExportFile = toPath(mainFileRelative, packageRootPath, getCanonicalFileName);
                     if (removeFileExtension(mainExportFile) === removeFileExtension(getCanonicalFileName(path))) {
                         return packageRootPath;
