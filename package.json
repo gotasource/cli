@@ -2,7 +2,7 @@
     "name": "@gota/cli",
     "author": "Gota",
     "homepage": "https://github.com/gotasource/cli",
-    "version": "0.0.12",
+    "version": "0.0.14",
     "license": "Apache-2.0",
     "description": "Custom TypeScript Compiler",
     "keywords": [
